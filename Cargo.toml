@@ -14,3 +14,7 @@ tokio = { version = "1", features = [
 tokio-rustls = { version = "0.26.0", default-features = false, features = [
     "ring",
 ] }
+packet = { version = "*", optional = true }
+
+[features]
+packet = ["dep:packet"]

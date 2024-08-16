@@ -5,22 +5,6 @@ pub trait Authorization {
     fn port(&self) -> u32;
 }
 
-#[derive(Debug, Clone)]
-pub struct VPNData {
-    pub ip: [u8; 4],
-    pub mask: usize,
-    pub gateway: Vec<u8>,
-    pub dns: String,
-    pub wins: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct GDWData {
-    pub gateway: Vec<u8>,
-    pub dns: String,
-    pub wins: String,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct AuthorizationStore {
     pub user: String,

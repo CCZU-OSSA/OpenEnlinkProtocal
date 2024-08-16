@@ -8,17 +8,18 @@ use tokio::{
 use tokio_rustls::{client::TlsStream, rustls::ClientConfig, TlsConnector};
 
 use crate::{
-    auth::{Authorization, GDWData, VPNData},
+    auth::Authorization,
+    data::{GDWData, ServerData},
     trust::NoVerification,
 };
 
 #[derive(Debug, Clone)]
-pub struct EnlinkVpn<A: Authorization> {
+pub struct EnlinkProtocal<A: Authorization> {
     pub authorization: A,
     pub stream: Arc<Mutex<TlsStream<TcpStream>>>,
 }
 
-impl<A: Authorization> EnlinkVpn<A> {
+impl<A: Authorization> EnlinkProtocal<A> {
     // Write
     pub async fn connect(authorization: A) -> tokio::io::Result<Self> {
         let config = Arc::new(
@@ -41,7 +42,7 @@ impl<A: Authorization> EnlinkVpn<A> {
         })
     }
 
-    pub async fn authorize(&self) -> tokio::io::Result<VPNData> {
+    pub async fn authorize(&self) -> tokio::io::Result<ServerData> {
         let mut guard = self.stream.lock().await;
         let token = self.authorization.token();
         let bytes_token = token.as_bytes();
@@ -77,7 +78,7 @@ impl<A: Authorization> EnlinkVpn<A> {
 
         guard.flush().await?;
 
-        // Unlock the Mutex
+        // Release the Mutex
         drop(guard);
 
         // Read VPNData
@@ -89,7 +90,8 @@ impl<A: Authorization> EnlinkVpn<A> {
         let mask = self.read_virtual_mask().await?;
         let data = self.read_gateway_dns_wins_data().await?;
 
-        Ok(VPNData {
+        println!("{:?}", self.read_until_end().await?);
+        Ok(ServerData {
             ip,
             mask,
             gateway: data.gateway,
@@ -238,5 +240,23 @@ impl<A: Authorization> EnlinkVpn<A> {
         }
 
         return Ok(GDWData { gateway, dns, wins });
+    }
+
+    pub async fn drop(&self, size: usize) -> tokio::io::Result<Vec<u8>> {
+        let mut data = vec![0u8; size];
+        self.stream.lock().await.read(&mut data).await?;
+        Ok(data)
+    }
+
+    pub async fn read_until_end(&self) -> tokio::io::Result<Vec<u8>> {
+        let mut data = vec![];
+        let mut guard = self.stream.lock().await;
+        loop {
+            let bin = guard.read_u8().await?;
+            data.push(bin);
+            if bin == 255 {
+                return Ok(data);
+            }
+        }
     }
 }

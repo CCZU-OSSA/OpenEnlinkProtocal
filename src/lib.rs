@@ -1,17 +1,20 @@
 pub mod auth;
+pub mod data;
+#[cfg(feature = "packet")]
+pub use packet;
+pub mod protocal;
 pub(crate) mod trust;
-pub mod vpn;
 
 #[cfg(test)]
 mod test {
 
-    use crate::{auth::AuthorizationStore, vpn::EnlinkVpn};
+    use crate::{auth::AuthorizationStore, protocal::EnlinkProtocal};
 
     #[tokio::test]
     async fn test_vpn_stablity() {
         let auth = AuthorizationStore::default();
 
-        let vpn = EnlinkVpn::connect(auth).await.unwrap();
+        let vpn = EnlinkProtocal::connect(auth).await.unwrap();
         println!("{:?}", vpn.authorize().await.unwrap());
     }
 }
