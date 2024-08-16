@@ -78,7 +78,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
 
         guard.flush().await?;
 
-        // Release the Mutex
+        // Release Mutex
         drop(guard);
 
         // Read VPNData
@@ -240,6 +240,25 @@ impl<A: Authorization> EnlinkProtocal<A> {
         }
 
         return Ok(GDWData { gateway, dns, wins });
+    }
+
+    pub async fn read_data(&self) -> tokio::io::Result<Vec<u8>> {
+        let mut guard = self.stream.lock().await;
+        let mut status = [0u8; 4];
+        guard.read_exact(&mut status).await?;
+
+        // 1, 4... data
+        // 1, 2... heartbeat
+        if status[0] != 1 || status[1] != 2 || status[2] != 0 || status[3] != 10 {
+            let len = (status[3] & 255) | (status[2] << 8);
+            let mut data = vec![0u8; len as usize - 8];
+            guard.read_exact(&mut data).await?;
+            Ok(data)
+        } else {
+            // Release Mutex
+            drop(guard);
+            Ok(self.drop(2048).await?)
+        }
     }
 
     pub async fn drop(&self, size: usize) -> tokio::io::Result<Vec<u8>> {
