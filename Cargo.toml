@@ -19,4 +19,5 @@ zero-packet = { version = "*", optional = true }
 [features]
 default = ["full"]
 packet = ["dep:zero-packet"]
-full = ["packet"]
+server = []
+full = ["packet", "server"]

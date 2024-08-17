@@ -3,8 +3,9 @@ pub mod data;
 #[cfg(feature = "packet")]
 pub use zero_packet as packet;
 pub mod protocal;
+#[cfg(feature = "server")]
+pub mod server;
 pub(crate) mod trust;
-
 #[cfg(test)]
 mod test {
 

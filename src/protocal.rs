@@ -245,14 +245,19 @@ impl<A: Authorization> EnlinkProtocal<A> {
     pub async fn read_data(&self) -> tokio::io::Result<Vec<u8>> {
         let mut guard = self.stream.lock().await;
         let mut status = [0u8; 4];
-        guard.read_exact(&mut status).await?;
+        if guard.read(&mut status).await? == 0 {
+            return Err(tokio::io::Error::new(ErrorKind::NotFound, "No data read"));
+        }
 
         // 1, 4... data
         // 1, 2... heartbeat
         if status[0] != 1 || status[1] != 2 || status[2] != 0 || status[3] != 10 {
             let len = (status[3] & 255) | (status[2] << 8);
             let mut data = vec![0u8; len as usize - 8];
-            guard.read_exact(&mut data).await?;
+
+            if guard.read(&mut data).await? == 0 {
+                return Err(tokio::io::Error::new(ErrorKind::NotFound, "No data read"));
+            }
             Ok(data)
         } else {
             // Release Mutex
@@ -308,22 +313,22 @@ pub mod packet {
         /// Malloc the size of packet yourself.
         ///
         /// This method returns a [`Packet`].
-        /// 
-        /// A [`Packet`] contains a [`TcpReader`] or [`UdpReader`] and [`PacketParser`] 
-        /// 
-        /// 
+        ///
+        /// A [`Packet`] contains a [`TcpReader`] or [`UdpReader`] and [`PacketParser`]
+        ///
+        ///
         /// ```
         /// let mut data = vec![0u8, 512];
-        /// 
+        ///
         /// match protocal.read_packet(&mut data){
         ///     Packet::UDP(transport, parsed) => ...
         ///     Packet::TCP(transport, parsed) => ...
         ///     _ => ...
-        /// } 
+        /// }
         /// ```
-        /// 
+        ///
         /// FYI,
-        /// 
+        ///
         /// [`zero_packet::transport::tcp::TCP_MIN_HEADER_LENGTH`]
         ///
         /// [`zero_packet::transport::udp::UDP_HEADER_LENGTH`]
