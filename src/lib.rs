@@ -1,7 +1,7 @@
 pub mod auth;
 pub mod data;
 #[cfg(feature = "packet")]
-pub use packet;
+pub use zero_packet as packet;
 pub mod protocal;
 pub(crate) mod trust;
 
