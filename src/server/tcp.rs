@@ -1,19 +1,15 @@
-use std::sync::Arc;
-
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
         tcp::{ReadHalf, WriteHalf},
         TcpListener, TcpStream,
     },
-    sync::Mutex,
 };
-use tokio_rustls::client::TlsStream;
 
 use crate::{auth::Authorization, protocal::EnlinkProtocal};
 
 pub async fn launch_http_server(
-    authorization: impl Authorization + Clone,
+    authorization: impl Authorization + Clone + Send + Sync + 'static,
     port: usize,
 ) -> tokio::io::Result<()> {
     let proxy = EnlinkProtocal::connect(authorization).await?;
@@ -21,45 +17,48 @@ pub async fn launch_http_server(
     proxy.authorize().await?;
     loop {
         if let Ok((client, _)) = listener.accept().await {
-            tokio::spawn(forward(proxy.stream.clone(), client));
+            tokio::spawn(forward(proxy.clone(), client));
         }
     }
 }
-async fn send_client_proxy<'a>(proxy: Arc<Mutex<TlsStream<TcpStream>>>, mut reader: ReadHalf<'a>) {
+
+async fn send_client_proxy<'a, A: Authorization + Clone>(
+    proxy: EnlinkProtocal<A>,
+    mut reader: ReadHalf<'a>,
+) {
     loop {
         let mut data = [0u8; 2048];
-
-        if reader.read(&mut data).await.unwrap() > 0 {
-            let mut guard = proxy.lock().await;
-            // May panic, so drop Mutex here
-            // ! TODO Need Complete
-            guard.write(&data).await.map_err(|_| drop(guard)).unwrap();
+        let offset = reader.read(&mut data).await.unwrap();
+        if offset > 0 {
+            proxy.write_tcp_offset(&data, offset).await.unwrap();
         }
     }
 }
 
-async fn send_proxy_client<'a>(proxy: Arc<Mutex<TlsStream<TcpStream>>>, mut writer: WriteHalf<'a>) {
+async fn send_proxy_client<'a, A: Authorization + Clone>(
+    proxy: EnlinkProtocal<A>,
+    mut writer: WriteHalf<'a>,
+) {
     loop {
         let mut data = [0u8; 8];
 
-        let mut guard = proxy.lock().await;
-        if guard
+        let mut guard = proxy.stream.lock().await;
+
+        let offset = guard
             .read(&mut data)
             .await
             .map_err(|_| drop(guard))
-            .unwrap()
-            > 0
-        {
-            // ! TODO Need Complete
-            writer.write(&data).await.unwrap();
+            .unwrap();
+        if offset > 0 {
+            writer.write(&data.split_at(offset).0).await.unwrap();
         }
     }
 }
-async fn forward(proxy: Arc<Mutex<TlsStream<TcpStream>>>, mut client: TcpStream) {
+async fn forward<A: Authorization + Clone>(proxy: EnlinkProtocal<A>, mut client: TcpStream) {
     let (reader, writer) = client.split();
 
     tokio::join!(
         send_client_proxy(proxy.clone(), reader),
-        send_proxy_client(proxy, writer)
+        send_proxy_client(proxy.clone(), writer)
     );
 }

@@ -14,7 +14,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct EnlinkProtocal<A: Authorization> {
+pub struct EnlinkProtocal<A> {
     pub authorization: A,
     pub stream: Arc<Mutex<TlsStream<TcpStream>>>,
 }
@@ -108,21 +108,25 @@ impl<A: Authorization> EnlinkProtocal<A> {
         Ok(())
     }
 
-    pub async fn write_tcp(&self, data: &[u8], read: i16) -> tokio::io::Result<()> {
+    pub async fn write_tcp(&self, data: &[u8]) -> tokio::io::Result<()> {
         let mut guard = self.stream.lock().await;
         // Custom header
         guard.write(&[1, 4]).await?;
         // Length
-        guard.write_i16(read + 12).await?;
+        guard.write_u16((data.len() + 12) as u16).await?;
         // XID
         guard.write(&[0, 0, 0, 0]).await?;
         guard.write_i32(1).await?;
         // Data
         guard.write(data).await?;
-        guard.write_u8(0).await?;
-        guard.write_i16(read).await?;
+
         guard.flush().await?;
         Ok(())
+    }
+
+    /// Write data from offset position
+    pub async fn write_tcp_offset(&self, data: &[u8], offset: usize) -> tokio::io::Result<()> {
+        self.write_tcp(data.split_at(offset).0).await
     }
 
     // Read
