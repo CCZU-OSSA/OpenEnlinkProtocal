@@ -8,7 +8,7 @@ use tokio::{
 
 use crate::{auth::Authorization, protocal::EnlinkProtocal};
 
-pub async fn launch_http_server(
+pub async fn launch_tcp_server(
     authorization: impl Authorization + Clone + Send + Sync + 'static,
     port: usize,
 ) -> tokio::io::Result<()> {
@@ -16,7 +16,7 @@ pub async fn launch_http_server(
     let listener = TcpListener::bind(format!("127.0.0.1:{port}")).await?;
     proxy.authorize().await?;
     loop {
-        if let Ok((client, _)) = listener.accept().await {
+        if let Ok((client, _addr)) = listener.accept().await {
             tokio::spawn(forward(proxy.clone(), client));
         }
     }
@@ -42,7 +42,7 @@ async fn send_proxy_client<'a, A: Authorization + Clone>(
     loop {
         let mut data = [0u8; 8];
 
-        let mut guard = proxy.stream.lock().await;
+        let mut guard = proxy.reader.lock().await;
 
         let offset = guard
             .read(&mut data)
@@ -59,6 +59,6 @@ async fn forward<A: Authorization + Clone>(proxy: EnlinkProtocal<A>, mut client:
 
     tokio::join!(
         send_client_proxy(proxy.clone(), reader),
-        send_proxy_client(proxy.clone(), writer)
+        send_proxy_client(proxy, writer)
     );
 }

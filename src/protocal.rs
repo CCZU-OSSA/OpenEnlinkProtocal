@@ -1,7 +1,7 @@
 use std::{io::ErrorKind, sync::Arc};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::TcpStream,
     sync::Mutex,
 };
@@ -16,7 +16,8 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct EnlinkProtocal<A> {
     pub authorization: A,
-    pub stream: Arc<Mutex<TlsStream<TcpStream>>>,
+    pub reader: Arc<Mutex<ReadHalf<TlsStream<TcpStream>>>>,
+    pub writer: Arc<Mutex<WriteHalf<TlsStream<TcpStream>>>>,
 }
 
 impl<A: Authorization> EnlinkProtocal<A> {
@@ -32,18 +33,21 @@ impl<A: Authorization> EnlinkProtocal<A> {
 
         let connector = TlsConnector::from(config);
         let tcpstream = TcpStream::connect(addr).await?;
-        let stream = connector
-            .connect(authorization.host().try_into().unwrap(), tcpstream)
-            .await?;
+        let (reader, writer) = split(
+            connector
+                .connect(authorization.host().try_into().unwrap(), tcpstream)
+                .await?,
+        );
 
         Ok(Self {
             authorization,
-            stream: Arc::new(Mutex::new(stream)),
+            reader: Arc::new(Mutex::new(reader)),
+            writer: Arc::new(Mutex::new(writer)),
         })
     }
 
     pub async fn authorize(&self) -> tokio::io::Result<ServerData> {
-        let mut guard = self.stream.lock().await;
+        let mut guard = self.writer.lock().await;
         let token = self.authorization.token();
         let bytes_token = token.as_bytes();
         let user = self.authorization.user();
@@ -78,9 +82,6 @@ impl<A: Authorization> EnlinkProtocal<A> {
 
         guard.flush().await?;
 
-        // Release Mutex
-        drop(guard);
-
         // Read VPNData
         let status = self.read_is_authorize_ok().await?;
         if !status {
@@ -89,8 +90,8 @@ impl<A: Authorization> EnlinkProtocal<A> {
         let ip = self.read_virtual_address().await?;
         let mask = self.read_virtual_mask().await?;
         let data = self.read_gateway_dns_wins_data().await?;
-
-        println!("{:?}", self.read_until_end().await?);
+        // Empty the Stream
+        self.read_until_end().await?;
         Ok(ServerData {
             ip,
             mask,
@@ -101,7 +102,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
     }
 
     pub async fn write_heartbeat(&self) -> tokio::io::Result<()> {
-        let mut guard = self.stream.lock().await;
+        let mut guard = self.writer.lock().await;
 
         guard.write(&[1, 1, 0, 12, 0, 0, 0, 0, 3, 0, 0, 0]).await?;
         guard.flush().await?;
@@ -109,7 +110,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
     }
 
     pub async fn write_tcp(&self, data: &[u8]) -> tokio::io::Result<()> {
-        let mut guard = self.stream.lock().await;
+        let mut guard = self.writer.lock().await;
         // Custom header
         guard.write(&[1, 4]).await?;
         // Length
@@ -131,7 +132,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
 
     // Read
     pub async fn read_is_authorize_ok(&self) -> tokio::io::Result<bool> {
-        let mut guard = self.stream.lock().await;
+        let mut guard = self.reader.lock().await;
         // Skip 10
         guard.read_exact(&mut [0u8; 10]).await?;
 
@@ -141,7 +142,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
     }
 
     pub async fn read_virtual_address(&self) -> tokio::io::Result<[u8; 4]> {
-        let mut guard = self.stream.lock().await;
+        let mut guard = self.reader.lock().await;
 
         let mut status = [0u8; 3];
         guard.read_exact(&mut status).await?;
@@ -161,7 +162,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
     }
 
     pub async fn read_virtual_mask(&self) -> tokio::io::Result<usize> {
-        let mut guard = self.stream.lock().await;
+        let mut guard = self.reader.lock().await;
 
         let mut status = [0u8; 3];
         guard.read_exact(&mut status).await?;
@@ -196,7 +197,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
     }
 
     pub async fn read_gateway_dns_wins_data(&self) -> tokio::io::Result<GDWData> {
-        let mut guard = self.stream.lock().await;
+        let mut guard = self.reader.lock().await;
         let mut gateway = vec![];
         let mut dns = String::default();
         let mut wins = String::default();
@@ -247,7 +248,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
     }
 
     pub async fn read_data(&self) -> tokio::io::Result<Vec<u8>> {
-        let mut guard = self.stream.lock().await;
+        let mut guard = self.reader.lock().await;
         let mut status = [0u8; 4];
         if guard.read(&mut status).await? == 0 {
             return Err(tokio::io::Error::new(ErrorKind::NotFound, "No data read"));
@@ -272,13 +273,13 @@ impl<A: Authorization> EnlinkProtocal<A> {
 
     pub async fn drop(&self, size: usize) -> tokio::io::Result<Vec<u8>> {
         let mut data = vec![0u8; size];
-        self.stream.lock().await.read(&mut data).await?;
+        self.reader.lock().await.read(&mut data).await?;
         Ok(data)
     }
 
     pub async fn read_until_end(&self) -> tokio::io::Result<Vec<u8>> {
         let mut data = vec![];
-        let mut guard = self.stream.lock().await;
+        let mut guard = self.reader.lock().await;
         loop {
             let bin = guard.read_u8().await?;
             data.push(bin);
@@ -337,7 +338,7 @@ pub mod packet {
         ///
         /// [`zero_packet::transport::udp::UDP_HEADER_LENGTH`]
         async fn read_packet<'a>(&self, packet: &'a mut Vec<u8>) -> tokio::io::Result<Packet<'a>> {
-            let mut guard = self.stream.lock().await;
+            let mut guard = self.reader.lock().await;
             guard.read(packet).await?;
             let parsed = PacketParser::parse(packet)
                 .map_err(|err| tokio::io::Error::new(ErrorKind::InvalidData, err))?;
