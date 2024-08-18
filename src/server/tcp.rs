@@ -18,9 +18,7 @@ pub async fn launch_tcp_server(
     loop {
         if let Ok((client, addr)) = listener.accept().await {
             println!("Connect from {addr}.");
-            // No Concurrency
-            forward(proxy.clone(), client).await;
-            println!("Connect Done.");
+            tokio::spawn(forward(proxy.clone(), client));
         }
     }
 }
@@ -29,18 +27,11 @@ async fn send_client_proxy<'a, A: Authorization + Clone>(
     proxy: EnlinkProtocal<A>,
     mut reader: ReadHalf<'a>,
 ) -> tokio::io::Result<()> {
-    let mut alert_flag = true;
-
     loop {
         let mut data = [0u8; 2048];
         let offset = reader.read(&mut data).await?;
-        if alert_flag {
-            println!("Client forward alive");
-            alert_flag = false;
-        }
+
         if offset > 0 {
-            alert_flag = true;
-            println!("{:?}", data);
             println!("Read {offset} Length from client, send to proxy...");
             proxy.write_tcp_offset(&data, offset).await?;
         }
@@ -51,20 +42,14 @@ async fn send_proxy_client<'a, A: Authorization + Clone>(
     proxy: EnlinkProtocal<A>,
     mut writer: WriteHalf<'a>,
 ) -> tokio::io::Result<()> {
-    let mut alert_flag = true;
     loop {
         let mut data = [0u8; 8];
 
         let mut guard = proxy.reader.lock().await;
-        if alert_flag {
-            println!("Proxy forward alive");
-            alert_flag = false;
-        }
 
         let offset = guard.read(&mut data).await?;
         if offset > 0 {
             println!("Read {offset} Length from proxy, send to client...");
-            alert_flag = true;
             writer.write(&data.split_at(offset).0).await.unwrap();
         }
     }
