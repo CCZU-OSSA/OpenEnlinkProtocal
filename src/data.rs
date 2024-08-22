@@ -1,7 +1,7 @@
 #[derive(Debug, Clone)]
 pub struct ServerData {
-    pub ip: [u8; 4],
-    pub mask: usize,
+    pub address: [u8; 4],
+    pub mask: [u8; 4],
     pub gateway: [u8; 4],
     pub dns: String,
     pub wins: String,

@@ -1,4 +1,4 @@
-use std::{io::ErrorKind, sync::Arc};
+use std::{io::ErrorKind, sync::Arc, vec};
 
 use tokio::{
     io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
@@ -88,12 +88,33 @@ impl<A: Authorization> EnlinkProtocal<A> {
             return Err(tokio::io::Error::new(ErrorKind::Other, "Authorize Failed"));
         }
         let ip = self.read_virtual_address().await?;
-        let mask = self.read_virtual_mask().await?;
+        let raw_mask = self.read_virtual_mask().await?;
+        let mut vec_mask = vec![true; raw_mask];
+        vec_mask.append(&mut vec![false; 32 - raw_mask]);
+        let chucks_mask: Vec<u8> = vec_mask
+            .chunks(8)
+            .map(|chuck| {
+                u8::from_str_radix(
+                    &chuck.iter().fold(String::new(), |val, e| {
+                        if *e {
+                            format!("{val}1")
+                        } else {
+                            format!("{val}0")
+                        }
+                    }),
+                    2,
+                )
+                .unwrap()
+            })
+            .collect();
+
+        let mask = chucks_mask[0..4].try_into().unwrap();
+
         let data = self.read_gateway_dns_wins_data().await?;
         // Empty the Stream
         self.read_until_end().await?;
         Ok(ServerData {
-            ip,
+            address: ip,
             mask,
             gateway: data.gateway,
             dns: data.dns,
@@ -286,73 +307,6 @@ impl<A: Authorization> EnlinkProtocal<A> {
             data.push(bin);
             if bin == 255 {
                 return Ok(data);
-            }
-        }
-    }
-}
-
-#[cfg(feature = "packet")]
-pub mod packet {
-    use std::{future::Future, io::ErrorKind};
-
-    use tokio::io::AsyncReadExt;
-    use zero_packet::{
-        packet::parser::PacketParser,
-        transport::{tcp::TcpReader, udp::UdpReader},
-    };
-
-    use crate::auth::Authorization;
-
-    use super::EnlinkProtocal;
-    pub enum Packet<'a> {
-        UDP(UdpReader<'a>, PacketParser<'a>),
-        TCP(TcpReader<'a>, PacketParser<'a>),
-    }
-    pub trait PacketStream {
-        fn read_packet<'a>(
-            &self,
-            packet: &'a mut Vec<u8>,
-        ) -> impl Future<Output = tokio::io::Result<Packet<'a>>>;
-    }
-
-    impl<A: Authorization> PacketStream for EnlinkProtocal<A> {
-        /// Malloc the size of packet yourself.
-        ///
-        /// This method returns a [`Packet`].
-        ///
-        /// A [`Packet`] contains a [`TcpReader`] or [`UdpReader`] and [`PacketParser`]
-        ///
-        ///
-        /// ```
-        /// let mut data = vec![0u8, 512];
-        ///
-        /// match protocal.read_packet(&mut data){
-        ///     Packet::UDP(transport, parsed) => ...
-        ///     Packet::TCP(transport, parsed) => ...
-        ///     _ => ...
-        /// }
-        /// ```
-        ///
-        /// FYI,
-        ///
-        /// [`zero_packet::transport::tcp::TCP_MIN_HEADER_LENGTH`]
-        ///
-        /// [`zero_packet::transport::udp::UDP_HEADER_LENGTH`]
-        async fn read_packet<'a>(&self, packet: &'a mut Vec<u8>) -> tokio::io::Result<Packet<'a>> {
-            let mut guard = self.reader.lock().await;
-            guard.read(packet).await?;
-            let parsed = PacketParser::parse(packet)
-                .map_err(|err| tokio::io::Error::new(ErrorKind::InvalidData, err))?;
-
-            if let Ok(tcp) = TcpReader::new(packet) {
-                Ok(Packet::TCP(tcp, parsed))
-            } else if let Ok(udp) = UdpReader::new(packet) {
-                Ok(Packet::UDP(udp, parsed))
-            } else {
-                Err(tokio::io::Error::new(
-                    ErrorKind::Unsupported,
-                    format!("Unsupport packet: {:?}", packet),
-                ))
             }
         }
     }
