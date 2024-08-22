@@ -16,8 +16,13 @@ tokio-rustls = { version = "0.26.0", default-features = false, features = [
 ] }
 zero-packet = { version = "*", optional = true }
 
+[target.'cfg(windows)'.dependencies]
+wintun = { version = "0.5.0", optional = true }
+
+
 [features]
 default = ["full"]
 packet = ["dep:zero-packet"]
 server = []
-full = ["packet", "server"]
+server-tun = ["server", "dep:wintun"]
+full = ["packet", "server", "server-tun"]

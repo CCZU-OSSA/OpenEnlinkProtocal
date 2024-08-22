@@ -2,6 +2,7 @@ pub trait Authorization {
     fn user(&self) -> String;
     fn token(&self) -> String;
     fn host(&self) -> String;
+    fn dns(&self) -> String;
     fn port(&self) -> u32;
 }
 
@@ -10,6 +11,7 @@ pub struct AuthorizationStore {
     pub user: String,
     pub token: String,
     pub host: String,
+    pub dns: String,
     pub port: u32,
 }
 
@@ -18,12 +20,15 @@ impl AuthorizationStore {
         user: impl Into<String>,
         token: impl Into<String>,
         host: impl Into<String>,
+        dns: impl Into<String>,
+
         port: u32,
     ) -> Self {
         Self {
             user: user.into(),
             token: token.into(),
             host: host.into(),
+            dns: dns.into(),
             port,
         }
     }
@@ -44,5 +49,9 @@ impl Authorization for AuthorizationStore {
 
     fn port(&self) -> u32 {
         self.port
+    }
+    
+    fn dns(&self) -> String {
+        self.dns.clone()
     }
 }

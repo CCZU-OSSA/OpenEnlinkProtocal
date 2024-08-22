@@ -117,6 +117,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
         guard.write_u16((data.len() + 12) as u16).await?;
         // XID
         guard.write(&[0, 0, 0, 0]).await?;
+        // APP ID
         guard.write_i32(1).await?;
         // Data
         guard.write(data).await?;
@@ -198,7 +199,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
 
     pub async fn read_gateway_dns_wins_data(&self) -> tokio::io::Result<GDWData> {
         let mut guard = self.reader.lock().await;
-        let mut gateway = vec![];
+        let mut gateway = [0u8; 4];
         let mut dns = String::default();
         let mut wins = String::default();
 
@@ -212,7 +213,7 @@ impl<A: Authorization> EnlinkProtocal<A> {
                         let mut data = vec![0u8; length as usize];
                         guard.read_exact(&mut data).await?;
 
-                        gateway = data.into_iter().map(|val| val & 255).collect();
+                        gateway = [data[0] & 255, data[1] & 255, data[2] & 255, data[3] & 255];
                     }
                     [36, 0] => {
                         let length = guard.read_u8().await?;
