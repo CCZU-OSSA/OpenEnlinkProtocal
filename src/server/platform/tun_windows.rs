@@ -9,9 +9,9 @@ use std::{
 
 use wintun::{load_from_path, Session, MAX_RING_CAPACITY};
 
-use crate::{auth::Authorization, packet::parse_packet, protocal::EnlinkProtocal};
+use crate::{auth::Authorization, protocal::EnlinkProtocal};
 
-static RUNNING: AtomicBool = AtomicBool::new(false);
+static RUNNING: AtomicBool = AtomicBool::new(true);
 
 pub async fn launch_tun_service(
     authorization: impl Authorization + Clone + Send + Sync + 'static,
@@ -62,15 +62,19 @@ pub async fn launch_tun_service(
 
 async fn forward(session: Arc<Session>) {
     while RUNNING.load(Ordering::Relaxed) {
-        let read_packet = session.receive_blocking();
+        let incoming = session.receive_blocking();
 
-        if let Ok(packet) = read_packet {
-            println!("Packet Length {}", packet.bytes().len());
-            #[cfg(feature = "packet")]
-            {
-                println!("Recv Packet: {:?}", parse_packet(packet.bytes()));
-            }
-            session.send_packet(packet);
+        if let Ok(packet) = incoming {
+            println!("Recv Packet Length {}", packet.bytes().len());
+
+            let mut spacket = session
+                .allocate_send_packet(packet.bytes().len() as u16)
+                .unwrap();
+
+            spacket.bytes_mut().clone_from_slice(packet.bytes());
+            session.send_packet(spacket);
+        } else if let Err(msg) = incoming {
+            println!("{}", msg);
         }
     }
 }

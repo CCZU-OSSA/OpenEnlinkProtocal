@@ -1,3 +1,5 @@
+///! Use packet to replace it
+
 pub use zero_packet as packet;
 
 use std::io::ErrorKind;
