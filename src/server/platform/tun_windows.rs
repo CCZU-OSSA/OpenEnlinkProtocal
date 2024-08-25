@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use packet::ip::{v4::Packet, Protocol};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::TcpStream,
@@ -61,11 +62,8 @@ pub async fn launch_tun_service(
     let session = Arc::new(adapter.start_session(MAX_RING_CAPACITY)?);
     let writer = proxy.writer.clone();
     let reader = proxy.reader.clone();
-    tokio::join!(
-        forward_readin(session.clone(), writer),
-        forward_writeout(session.clone(), reader)
-    );
-
+    tokio::spawn(forward_writeout(session.clone(), reader));
+    tokio::spawn(forward_readin(session.clone(), writer));
     println!("Press `Enter` to Stop Service");
     let _ = stdin().lock().read_line(&mut String::new());
     RUNNING.store(false, Ordering::Relaxed);
@@ -82,21 +80,27 @@ async fn forward_readin(
         let incoming = session.receive_blocking();
 
         if let Ok(packet) = incoming {
-            println!(
-                "Recv Packet Length {}, forward to Proxy",
-                packet.bytes().len()
-            );
-            let data = packet.bytes();
-            let mut guard = writer.lock().await;
-            // TCP
-            guard.write(&[1, 4]).await.unwrap();
-            // Length
-            guard.write_u16((data.len() + 12) as u16).await.unwrap();
-            // XID
-            guard.write(&[0, 0, 0, 0]).await.unwrap();
-            // APP ID
-            guard.write_i32(1).await.unwrap();
-            guard.write(packet.bytes()).await.unwrap();
+            if let Ok(parsed) = Packet::new(packet.bytes()) {
+                if parsed.protocol() == Protocol::Tcp {
+                    println!("Received {parsed:?}");
+                    let mut data = vec![];
+                    // TCP
+                    data.write(&[1, 4]).await.unwrap();
+
+                    // Length
+                    data.write_u16((packet.bytes().len() + 12) as u16)
+                        .await
+                        .unwrap();
+
+                    // XID
+                    data.write(&[0, 0, 0, 0]).await.unwrap();
+
+                    // APP ID
+                    data.write_i32(1).await.unwrap();
+                    data.write(packet.bytes()).await.unwrap();
+                    writer.lock().await.write(&data).await.unwrap();
+                }
+            }
         } else if let Err(msg) = incoming {
             println!("{}", msg);
         }
@@ -114,8 +118,7 @@ async fn forward_writeout(
         if let Ok(offset) = incoming {
             drop(guard);
             if offset > 0 {
-                println!("Readin {offset} from VPN");
-
+                println!("Read {offset} in Proxy");
                 let mut packet = session.allocate_send_packet(offset as u16).unwrap();
                 packet
                     .bytes_mut()
