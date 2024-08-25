@@ -7,6 +7,12 @@ use std::{
     },
 };
 
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
+    net::TcpStream,
+    sync::Mutex,
+};
+use tokio_rustls::client::TlsStream;
 use wintun::{load_from_path, Session, MAX_RING_CAPACITY};
 
 use crate::{auth::Authorization, protocal::EnlinkProtocal};
@@ -25,6 +31,7 @@ pub async fn launch_tun_service(
         Err(_) => wintun::Adapter::create(&tun, "EnlinkVPN", "Wintun", None)
             .expect("Failed to create Adapter! Need Permission?"),
     };
+
     let proxy = EnlinkProtocal::connect(authorization.clone()).await?;
     let server = proxy.authorize().await?;
     println!("Server: {:?}", server);
@@ -43,14 +50,21 @@ pub async fn launch_tun_service(
             addr
         })
         .collect();
+    // Fallback
+    // dns_list.push(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)));
+
     println!("Set DNS Servers");
     adapter.set_dns_servers(&dns_list)?;
 
     // Start Session
     println!("Start Session");
     let session = Arc::new(adapter.start_session(MAX_RING_CAPACITY)?);
-
-    tokio::spawn(forward(session.clone()));
+    let writer = proxy.writer.clone();
+    let reader = proxy.reader.clone();
+    tokio::join!(
+        forward_readin(session.clone(), writer),
+        forward_writeout(session.clone(), reader)
+    );
 
     println!("Press `Enter` to Stop Service");
     let _ = stdin().lock().read_line(&mut String::new());
@@ -60,21 +74,57 @@ pub async fn launch_tun_service(
     Ok(())
 }
 
-async fn forward(session: Arc<Session>) {
+async fn forward_readin(
+    session: Arc<Session>,
+    writer: Arc<Mutex<WriteHalf<TlsStream<TcpStream>>>>,
+) {
     while RUNNING.load(Ordering::Relaxed) {
         let incoming = session.receive_blocking();
 
         if let Ok(packet) = incoming {
-            println!("Recv Packet Length {}", packet.bytes().len());
-
-            let mut spacket = session
-                .allocate_send_packet(packet.bytes().len() as u16)
-                .unwrap();
-
-            spacket.bytes_mut().clone_from_slice(packet.bytes());
-            session.send_packet(spacket);
+            println!(
+                "Recv Packet Length {}, forward to Proxy",
+                packet.bytes().len()
+            );
+            let data = packet.bytes();
+            let mut guard = writer.lock().await;
+            // TCP
+            guard.write(&[1, 4]).await.unwrap();
+            // Length
+            guard.write_u16((data.len() + 12) as u16).await.unwrap();
+            // XID
+            guard.write(&[0, 0, 0, 0]).await.unwrap();
+            // APP ID
+            guard.write_i32(1).await.unwrap();
+            guard.write(packet.bytes()).await.unwrap();
         } else if let Err(msg) = incoming {
             println!("{}", msg);
+        }
+    }
+}
+
+async fn forward_writeout(
+    session: Arc<Session>,
+    reader: Arc<Mutex<ReadHalf<TlsStream<TcpStream>>>>,
+) {
+    while RUNNING.load(Ordering::Relaxed) {
+        let mut buf = [0u8; 8];
+        let mut guard = reader.lock().await;
+        let incoming = guard.read(&mut buf).await;
+        if let Ok(offset) = incoming {
+            drop(guard);
+            if offset > 0 {
+                println!("Readin {offset} from VPN");
+
+                let mut packet = session.allocate_send_packet(offset as u16).unwrap();
+                packet
+                    .bytes_mut()
+                    .clone_from_slice(&mut buf.split_at(offset).0);
+                session.send_packet(packet);
+            }
+        } else if let Err(msg) = incoming {
+            println!("Failed: {msg}");
+            drop(guard)
         }
     }
 }

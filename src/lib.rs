@@ -1,7 +1,5 @@
 pub mod auth;
 pub mod data;
-#[cfg(feature = "packet")]
-pub mod packet;
 pub mod protocal;
 #[cfg(feature = "server")]
 pub mod server;

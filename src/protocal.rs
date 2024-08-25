@@ -111,7 +111,6 @@ impl<A: Authorization> EnlinkProtocal<A> {
         let mask = chucks_mask[0..4].try_into().unwrap();
 
         let data = self.read_gateway_dns_wins_data().await?;
-        // Empty the Stream
         self.read_until_end().await?;
         Ok(ServerData {
             address: ip,
