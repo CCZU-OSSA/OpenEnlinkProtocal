@@ -76,9 +76,8 @@ impl<A: Authorization> EnlinkProtocal<A> {
         // Token
         guard.write_u8(bytes_token.len() as u8).await?;
         guard.write(bytes_token).await?;
-        // -1 & 0xff
 
-        guard.write_u8(255).await?;
+        guard.write_i8(-1).await?;
 
         guard.flush().await?;
 

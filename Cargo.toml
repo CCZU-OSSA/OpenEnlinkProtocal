@@ -19,10 +19,12 @@ packet = { version = "*", optional = true }
 [target.'cfg(windows)'.dependencies]
 wintun = { version = "0.5.0", optional = true }
 
+[target.'cfg(not(windows))'.dependencies]
+tun = { version = "0.6.1", optional = true, features = ["async"] }
 
 [features]
 default = ["full"]
 packet = ["dep:packet"]
 server = []
-server-tun = ["server", "dep:wintun"]
+server-tun = ["server", "dep:wintun", "dep:tun"]
 full = ["packet", "server", "server-tun"]
